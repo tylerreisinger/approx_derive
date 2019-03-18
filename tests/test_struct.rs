@@ -13,6 +13,7 @@ struct NamedStruct {
 }
 
 #[derive(AbsDiffEq, PartialEq, Debug)]
+#[approx(default_epsilon = 1e-8)]
 struct ExactEqStruct {
     x: f32,
     y: f32,

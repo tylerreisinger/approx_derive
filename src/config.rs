@@ -1,5 +1,4 @@
-use proc_macro;
-use syn::{self, parse_macro_input, Token, parenthesized};
+use syn::{self, Token, parenthesized};
 use syn::parse::Parse;
 
 pub struct DeriveConfig {
@@ -16,7 +15,6 @@ pub enum ConfigAttrib {
 }
 
 pub fn parse_attributes(attributes: &Vec<syn::Attribute>) -> Result<DeriveConfig, syn::Error> {
-    println!("{:?}", attributes);
     let mut config = DeriveConfig {
         epsilon_ty: None,
         default_epsilon: None,

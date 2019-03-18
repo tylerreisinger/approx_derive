@@ -1,4 +1,3 @@
-use proc_macro2::Span;
 use syn::{self, parenthesized, Token};
 use syn::parse::Parse;
 
@@ -41,7 +40,6 @@ impl FieldMember {
         let mut parsed_attribs = Vec::new();
         for attrib in &field.attrs {
             if attrib.path.segments[0].ident.to_string() == "approx" {
-                println!("{:?}", attrib);
                 let parsed_attrib = syn::parse2::<MemberAttribute>(attrib.tts.clone())?;
                 parsed_attribs.push(parsed_attrib);
             }

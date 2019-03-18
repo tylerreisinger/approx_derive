@@ -9,64 +9,119 @@ use syn::{parse_quote, Token};
 use quote::quote;
 
 use attrib::{FieldMember, MemberAttribKind};
+use crate::config::DeriveConfig;
 
+enum DeriveKind {
+    AbsDiffEq,
+    RelativeEq,
+    UlpsEq,
+}
 
 #[proc_macro_derive(AbsDiffEq, attributes(approx))]
 pub fn derive_abs_diff_eq(tokens: TokenStream) -> TokenStream {
-    match derive_abs_diff_eq_impl(tokens) {
+    derive_entry(tokens, DeriveKind::AbsDiffEq)
+}
+#[proc_macro_derive(RelativeEq, attributes(approx))]
+pub fn derive_relative_eq(tokens: TokenStream) -> TokenStream {
+    derive_entry(tokens, DeriveKind::RelativeEq)
+}
+#[proc_macro_derive(UlpsEq, attributes(approx))]
+pub fn derive_ulps_eq(tokens: TokenStream) -> TokenStream {
+    derive_entry(tokens, DeriveKind::UlpsEq)
+}
+
+fn derive_entry(tokens: TokenStream, kind: DeriveKind) -> TokenStream {
+    match derive_approx(tokens, kind) {
         Ok(ts) => ts,
         Err(e) => e.to_compile_error().into()
     }
 }
 
-fn derive_abs_diff_eq_impl(tokens: TokenStream) -> Result<TokenStream, syn::Error> {
+fn derive_approx(tokens: TokenStream, kind: DeriveKind) -> Result<TokenStream, syn::Error> {
     let input: syn::DeriveInput = syn::parse(tokens)?;
-    let ident = input.ident;
     let config = config::parse_attributes(&input.attrs)?;
 
-    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
-
-    match input.data {
-        syn::Data::Struct(ref obj) => {
-            let fields = &obj.fields;
-            let epsilon_ty =
-                if let Some(ty) = config.epsilon_ty { ty } else { get_epsilon_type(fields.iter()) };
-            let members = get_members_from_fields(fields)?;
-
-            let compare_expr = build_approx_eq_body(&members, &epsilon_ty, &build_abs_diff_comparison);
-
-            let default_epsilon =
-                if let Some(val) = config.default_epsilon {
-                    val
-                } else {
-                    parse_quote! { Self::Epsilon::default_epsilon() }
-                };
-
-            let out = quote! {
-                #[automatically_derived]
-                impl #impl_generics approx::AbsDiffEq for #ident #type_generics
-                    #where_clause
-                {
-                    type Epsilon = <#epsilon_ty as approx::AbsDiffEq>::Epsilon;
-
-                    #[inline]
-                    fn default_epsilon() -> Self::Epsilon {
-                        #default_epsilon
-                    }
-
-                    fn abs_diff_eq(&self, other: &Self, epsilon: Self::Epsilon) -> bool {
-                        #compare_expr
-                    }
-                }
-            };
-            Ok(out.into())
-        }
-        syn::Data::Enum(ref obj) => {
+    match &input.data {
+        syn::Data::Struct(r#struct) => {
+            match kind {
+                DeriveKind::AbsDiffEq => derive_abs_diff_struct(&input, config, r#struct),
+                DeriveKind::RelativeEq => derive_relative_struct(&input, config, r#struct),
+                _ => unimplemented!()
+            }
+        },
+        syn::Data::Enum(r#enum) => {
             unimplemented!()
-        }
+        },
         syn::Data::Union(r#union) => {
             Err(syn::Error::new(r#union.union_token.span, "Unions are not supported by approx_derive"))
         }
+    }
+}
+
+fn derive_abs_diff_struct(input: &syn::DeriveInput, config: DeriveConfig, obj: &syn::DataStruct) -> Result<TokenStream, syn::Error> {
+    let fields = &obj.fields;
+    let ident = &input.ident;
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+
+    let epsilon_ty =
+        if let Some(ref ty) = config.epsilon_ty { ty.clone() } else { get_epsilon_type(fields.iter()) };
+    let members = get_members_from_fields(fields)?;
+    let compare_expr = build_comparison_body(&members, &build_abs_diff_comparison);
+    let default_epsilon = build_default_epsilon_expr(&config);
+
+    let out = quote! {
+        #[automatically_derived]
+        impl #impl_generics approx::AbsDiffEq for #ident #type_generics
+            #where_clause
+        {
+            type Epsilon = <#epsilon_ty as approx::AbsDiffEq>::Epsilon;
+
+            #[inline]
+            fn default_epsilon() -> Self::Epsilon {
+                #default_epsilon
+            }
+
+            fn abs_diff_eq(&self, other: &Self, epsilon: Self::Epsilon) -> bool {
+                #compare_expr
+            }
+        }
+    };
+    Ok(out.into())
+}
+
+fn derive_relative_struct(input: &syn::DeriveInput, config: DeriveConfig, obj: &syn::DataStruct) -> Result<TokenStream, syn::Error> {
+    let fields = &obj.fields;
+    let ident = &input.ident;
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
+
+    let epsilon_ty =
+        if let Some(ref ty) = config.epsilon_ty { ty.clone() } else { get_epsilon_type(fields.iter()) };
+    let members = get_members_from_fields(fields)?;
+    let compare_expr = build_comparison_body(&members, &build_relative_comparison);
+
+    let out = quote! {
+        #[automatically_derived]
+        impl #impl_generics approx::RelativeEq for #ident #type_generics
+            #where_clause
+        {
+            #[inline]
+            fn default_relative() -> Self::Epsilon {
+                Self::Epsilon::default_relative()
+            }
+
+            fn abs_diff_eq(&self, other: &Self, epsilon: Self::Epsilon) -> bool {
+                #compare_expr
+            }
+        }
+    };
+    Ok(out.into())
+}
+
+fn build_default_epsilon_expr(config: &DeriveConfig) -> syn::Expr {
+    if let Some(val) = config.default_epsilon.clone() {
+        val
+    } else {
+        parse_quote! { Self::Epsilon::default_epsilon() }
     }
 }
 
@@ -89,7 +144,24 @@ fn build_abs_diff_comparison(field_member: &FieldMember) -> syn::Expr {
     }
 }
 
-fn build_approx_eq_body<F>(members: &Vec<FieldMember>, epsilon_ty: &syn::Type, expr_builder: F) -> syn::Expr
+fn build_relative_comparison(field_member: &FieldMember) -> syn::Expr {
+    if field_member.has_attrib(MemberAttribKind::ExactEq) {
+        build_exact_comparison(field_member)
+    } else {
+        let member = &field_member.member;
+        let ty = field_member.ty();
+        parse_quote! {
+            approx::RelativeEq::relative_eq(
+                &self.#member,
+                &other.#member,
+                epsilon.clone() as <#ty as approx::AbsDiffEq>::Epsilon,
+                max_relative.clone()
+            )
+        }
+    }
+}
+
+fn build_comparison_body<F>(members: &Vec<FieldMember>, expr_builder: F) -> syn::Expr
     where F: Fn(&FieldMember) -> syn::Expr
 {
     let mut compare_exprs = syn::punctuated::Punctuated::<syn::Expr, Token![&&]>::new();
