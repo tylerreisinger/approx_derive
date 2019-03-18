@@ -12,6 +12,14 @@ struct NamedStruct {
     z: f64,
 }
 
+#[derive(AbsDiffEq, PartialEq, Debug)]
+struct ExactEqStruct {
+    x: f32,
+    y: f32,
+    #[approx(exact_eq)]
+    z: i64,
+}
+
 /*
 #[derive(AbsDiffEq, PartialEq)]
 enum MyEnum {

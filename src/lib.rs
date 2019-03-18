@@ -1,23 +1,15 @@
 extern crate proc_macro;
 
-use proc_macro::TokenStream;
-use proc_macro2::Span;
-use syn::{parse_macro_input, parse_quote, Token};
-use quote::quote;
-
+mod attrib;
 mod config;
 
-#[derive(Debug, Clone)]
-struct FieldMember {
-    member: syn::Member,
-    field: syn::Field,
-}
+use proc_macro::TokenStream;
+use proc_macro2::Span;
+use syn::{parse_quote, Token, parenthesized};
+use quote::quote;
 
-impl FieldMember {
-    fn ty(&self) -> &syn::Type {
-        &self.field.ty
-    }
-}
+use attrib::{FieldMember, MemberAttribKind};
+
 
 #[proc_macro_derive(AbsDiffEq, attributes(approx))]
 pub fn derive_abs_diff_eq(tokens: TokenStream) -> TokenStream {
@@ -26,6 +18,7 @@ pub fn derive_abs_diff_eq(tokens: TokenStream) -> TokenStream {
         Err(e) => e.to_compile_error().into()
     }
 }
+
 
 fn derive_abs_diff_eq_impl(tokens: TokenStream) -> Result<TokenStream, syn::Error> {
     let input: syn::DeriveInput = syn::parse(tokens)?;
@@ -39,7 +32,7 @@ fn derive_abs_diff_eq_impl(tokens: TokenStream) -> Result<TokenStream, syn::Erro
             let fields = &obj.fields;
             let epsilon_ty =
                 if let Some(ty) = config.epsilon_ty { ty } else { get_epsilon_type(fields.iter()) };
-            let members = get_members_from_fields(fields);
+            let members = get_members_from_fields(fields)?;
 
             let compare_expr = build_approx_eq_body(&members, &epsilon_ty, &build_abs_diff_comparison);
 
@@ -71,11 +64,22 @@ fn derive_abs_diff_eq_impl(tokens: TokenStream) -> Result<TokenStream, syn::Erro
     }
 }
 
-fn build_abs_diff_comparison(field_member: &FieldMember) -> syn::Expr {
+fn build_exact_comparison(field_member: &FieldMember) -> syn::Expr {
     let member = &field_member.member;
-    let ty = field_member.ty();
     parse_quote! {
-        approx::AbsDiffEq::abs_diff_eq(&self.#member, &other.#member, epsilon.clone() as <#ty as approx::AbsDiffEq>::Epsilon)
+        self.#member == other.#member
+    }
+}
+
+fn build_abs_diff_comparison(field_member: &FieldMember) -> syn::Expr {
+    if field_member.has_attrib(MemberAttribKind::ExactEq) {
+        build_exact_comparison(field_member)
+    } else {
+        let member = &field_member.member;
+        let ty = field_member.ty();
+        parse_quote! {
+            approx::AbsDiffEq::abs_diff_eq(&self.#member, &other.#member, epsilon.clone() as <#ty as approx::AbsDiffEq>::Epsilon)
+        }
     }
 }
 
@@ -102,16 +106,13 @@ fn get_field_span(field: &syn::Field) -> Span {
     }
 }
 
-fn get_members_from_fields(fields: &syn::Fields) -> Vec<FieldMember> {
+fn get_members_from_fields(fields: &syn::Fields) -> Result<Vec<FieldMember>, syn::Error> {
     let mut members = Vec::new();
     match fields {
         syn::Fields::Named(fields) => {
             for field in fields.named.iter().cloned() {
                 let member = syn::Member::Named(field.ident.clone().unwrap());
-                let field_members = FieldMember {
-                    member,
-                    field,
-                };
+                let field_members = FieldMember::new(member, field)?;
                 members.push(field_members);
             }
         },
@@ -119,16 +120,13 @@ fn get_members_from_fields(fields: &syn::Fields) -> Vec<FieldMember> {
             for (i, field) in fields.unnamed.iter().cloned().enumerate() {
                 let field_span = get_field_span(&field);
                 let member = syn::Member::Unnamed(syn::Index { index: i as u32, span: field_span });
-                let field_members = FieldMember {
-                    member,
-                    field,
-                };
+                let field_members = FieldMember::new(member, field)?;
                 members.push(field_members);
             }
         },
         syn::Fields::Unit => {},
     }
-    members
+    Ok(members)
 }
 
 
@@ -144,3 +142,4 @@ fn get_epsilon_type(fields: syn::punctuated::Iter<syn::Field>) -> syn::Type {
     }
     out_type
 }
+
