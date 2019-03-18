@@ -6,17 +6,20 @@ pub struct DeriveConfig {
     /// A type specified with `#[approx(epsilon_ty = ...)]` to be used for `AbsDiffEq::Epsilon`
     /// If omitted, try to infer a valid type, or fail if we cannot.
     pub epsilon_ty: Option<syn::Type>,
+    pub default_epsilon: Option<syn::Expr>,
 }
 
 #[derive(Debug, Clone)]
 pub enum ConfigAttrib {
     EpsilonTy(syn::Type),
+    DefaultEpsilon(syn::Expr),
 }
 
 pub fn parse_attributes(attributes: &Vec<syn::Attribute>) -> Result<DeriveConfig, syn::Error> {
     println!("{:?}", attributes);
     let mut config = DeriveConfig {
         epsilon_ty: None,
+        default_epsilon: None,
     };
     for attrib in attributes {
         let inner_tts = attrib.tts.clone().into();
@@ -25,9 +28,11 @@ pub fn parse_attributes(attributes: &Vec<syn::Attribute>) -> Result<DeriveConfig
             ConfigAttrib::EpsilonTy(ty) => {
                 config.epsilon_ty = Some(ty);
             }
+            ConfigAttrib::DefaultEpsilon(expr) => {
+                config.default_epsilon = Some(expr);
+            }
         }
     }
-
     Ok(config)
 }
 
@@ -49,6 +54,11 @@ impl Parse for ConfigAttrib {
                     Err(syn::parse::Error::new(name.span(), "epsilon_ty must be provided as a quoted string"))
                 }
             },
+            "default_epsilon" => {
+                content.parse::<Token![=]>()?;
+                let expr: syn::Expr = content.parse()?;
+                Ok(ConfigAttrib::DefaultEpsilon(expr))
+            }
             _ => {
                 Err(syn::parse::Error::new(name.span(), format!("Invalid approx attribute {}", name)))
             }

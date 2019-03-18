@@ -5,7 +5,7 @@ mod config;
 
 use proc_macro::TokenStream;
 use proc_macro2::Span;
-use syn::{parse_quote, Token, parenthesized};
+use syn::{parse_quote, Token};
 use quote::quote;
 
 use attrib::{FieldMember, MemberAttribKind};
@@ -18,7 +18,6 @@ pub fn derive_abs_diff_eq(tokens: TokenStream) -> TokenStream {
         Err(e) => e.to_compile_error().into()
     }
 }
-
 
 fn derive_abs_diff_eq_impl(tokens: TokenStream) -> Result<TokenStream, syn::Error> {
     let input: syn::DeriveInput = syn::parse(tokens)?;
@@ -36,6 +35,13 @@ fn derive_abs_diff_eq_impl(tokens: TokenStream) -> Result<TokenStream, syn::Erro
 
             let compare_expr = build_approx_eq_body(&members, &epsilon_ty, &build_abs_diff_comparison);
 
+            let default_epsilon =
+                if let Some(val) = config.default_epsilon {
+                    val
+                } else {
+                    parse_quote! { Self::Epsilon::default_epsilon() }
+                };
+
             let out = quote! {
                 #[automatically_derived]
                 impl #impl_generics approx::AbsDiffEq for #ident #type_generics
@@ -45,7 +51,7 @@ fn derive_abs_diff_eq_impl(tokens: TokenStream) -> Result<TokenStream, syn::Erro
 
                     #[inline]
                     fn default_epsilon() -> Self::Epsilon {
-                        <#epsilon_ty as approx::AbsDiffEq>::default_epsilon()
+                        #default_epsilon
                     }
 
                     fn abs_diff_eq(&self, other: &Self, epsilon: Self::Epsilon) -> bool {
@@ -128,7 +134,6 @@ fn get_members_from_fields(fields: &syn::Fields) -> Result<Vec<FieldMember>, syn
     }
     Ok(members)
 }
-
 
 fn get_epsilon_type(fields: syn::punctuated::Iter<syn::Field>) -> syn::Type {
     let f32_ty: syn::Type = parse_quote! {f32};
